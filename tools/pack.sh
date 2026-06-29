@@ -15,7 +15,7 @@ set -eu
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 VER="$(cat VERSION)"
-KEY="${HERALD_KEY:?set HERALD_KEY to the package signing key}"
+KEY="${HERALD_KEY:-}"
 STRIP="${STRIP:-strip}"
 
 # ── per-component knobs ──────────────────────────────────────────────────────
@@ -40,5 +40,5 @@ printf 'id=%s\nname=%s\nversion=%s\nclass=system\ndepends=%s\n' \
 roots="$(cd "$STAGE" && ls -A | grep -v '^manifest$' | tr '\n' ' ')"
 cd "$STAGE" && tar --format=ustar -cf "$ROOT/$ID.hpkg" manifest $roots
 cd "$ROOT"
-openssl dgst -sha256 -sign "$KEY" -out "$ID.hpkg.sig" "$ID.hpkg"
+if [ -n "$KEY" ]; then openssl dgst -sha256 -sign "$KEY" -out "$ID.hpkg.sig" "$ID.hpkg"; else rm -f "$ID.hpkg.sig"; echo "[$ID] unsigned (no HERALD_KEY set)"; fi
 echo "[$ID] $ID.hpkg $VER ($(wc -c < "$ID.hpkg") bytes) + .sig"

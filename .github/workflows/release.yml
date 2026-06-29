@@ -1,0 +1,61 @@
+name: build hpkg
+
+# Builds the component's herald package (.hpkg) and attaches it to the GitHub
+# release. Reproduces the AspisOS toolchain exactly: stock musl 1.2.5 + the one
+# DNS-resolver patch (the same musl the OS ships), then fetches the pinned glyph
+# toolkit artifact and runs the repo's own `make`. The package is built UNSIGNED
+# here — the official signed distribution is the herald repo (Chancery signs the
+# Release; repo installs verify Release -> Packages-hash -> package-hash, not a
+# per-package signature). Set the HERALD_KEY secret to also sign if desired.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach the .hpkg to'
+        required: true
+        default: v1.0.0
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache musl toolchain
+        id: musl
+        uses: actions/cache@v4
+        with:
+          path: musl-toolchain
+          key: musl-1.2.5-x86_64-v1
+
+      - name: Build musl 1.2.5 (Aegis toolchain)
+        if: steps.musl.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          curl -fsSL https://musl.libc.org/releases/musl-1.2.5.tar.gz | tar xz
+          cd musl-1.2.5
+          # Aegis fix: CLOCK_REALTIME can jump backward on Aegis; use MONOTONIC.
+          sed -i 's/CLOCK_REALTIME/CLOCK_MONOTONIC/g' src/network/res_msend.c
+          ./configure --prefix=/usr --syslibdir=/lib --enable-shared CFLAGS="-O2 -fno-pie"
+          make -j"$(nproc)"
+          make install DESTDIR="$GITHUB_WORKSPACE/musl-toolchain"
+          # Point the specs + wrapper at the install dir (runtime /lib/ld-musl stays).
+          SPECS="$GITHUB_WORKSPACE/musl-toolchain/usr/lib/musl-gcc.specs"
+          sed -i "s|/usr/lib|$GITHUB_WORKSPACE/musl-toolchain/usr/lib|g; s|/usr/include|$GITHUB_WORKSPACE/musl-toolchain/usr/include|g" "$SPECS"
+          printf '#!/bin/sh\nexec "${REALGCC:-gcc}" "$@" -specs "%s"\n' "$SPECS" \
+            > "$GITHUB_WORKSPACE/musl-toolchain/usr/bin/musl-gcc"
+          chmod +x "$GITHUB_WORKSPACE/musl-toolchain/usr/bin/musl-gcc"
+
+      - name: Build the .hpkg
+        run: make MUSL_CC="$GITHUB_WORKSPACE/musl-toolchain/usr/bin/musl-gcc"
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: '*.hpkg'
