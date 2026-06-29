@@ -4,7 +4,7 @@
 # A .hpkg is a manifest-first uncompressed POSIX ustar + a detached
 # ECDSA-P256/SHA-256 signature. Every Lumen-ecosystem component is class=system
 # (first-party, signature-trusted: its herald id differs from the bundle/exec
-# name, and it may install across /bin //apps //etc), so herald installs the
+# name, and it may install across /bin /apps /etc), so herald installs the
 # whole payload tree verbatim.
 #
 # Per-component knobs are the five variables below; the payload is the built

@@ -1,93 +1,133 @@
 # lumen-terminal
 
 The Terminal app for **AspisOS**, a capability-based, no-ambient-authority
-operating system built on the from-scratch
+x86-64 operating system built on the from-scratch
 [Aegis](https://github.com/AspisOS/Aegis) kernel.
 
-terminal is a graphical terminal emulator. It is a standalone component of the
-Lumen desktop, distributed as a [herald](https://github.com/AspisOS/AspisOS)
-package, and runs as an external client of the
-[lumen](https://github.com/AspisOS/lumen) compositor (it connects to
-`/run/lumen.sock` over the external window protocol rather than being an
-in-process compositor built-in — this is the result of the subsystem-peeling
-work that moved regular terminal windows out of Lumen).
+terminal is a graphical terminal emulator: it opens a pseudo-terminal, spawns a
+shell on the slave, and bridges that PTY to a window. It is a standalone
+component of the Lumen desktop, distributed as a
+[herald](https://github.com/AspisOS/AspisOS) package, and runs as an **external
+client** of the [lumen](https://github.com/AspisOS/lumen) compositor — it
+connects to `/run/lumen.sock` over the Lumen window protocol rather than being an
+in-process compositor built-in. (Regular terminal windows were moved out of
+Lumen by the subsystem-peeling work; only the quake-style dropdown terminal
+remains embedded in the compositor.)
 
-## Role in the system
+## Where terminal fits
 
-- A `/apps` bundle app: launched from the desktop via its `app.ini` descriptor
-  (`name=Terminal`, `exec=terminal`).
-- Opens a PTY, spawns `/bin/stsh` on the slave via `sys_spawn`, and bridges the
-  two halves:
-  - PTY master output is fed to the `glyph_term` emulator core (libglyph),
-    rendered into the window backbuffer, and presented to Lumen as damage.
-  - `LUMEN_EV_KEY` events are translated back into VT input on the PTY master.
-- Key translation: Lumen delivers one byte per key event. Synthetic arrow codes
-  (`0xF1..0xF4`) are re-expanded to VT sequences (`\033[A`..`\033[D`); everything
-  else, including `^C` and bare Esc, writes through verbatim.
-- Window sizing: aims for 100x48 cells at the mono font's cell metrics, clamped
-  to roughly 7/8 of the framebuffer when Lumen passes `LUMEN_FB_W/LUMEN_FB_H`.
-  A 500-line scrollback covers taller output.
-- Signal handling reflects PTY foreground-group subtleties: SIGTERM closes
-  gracefully, SIGINT/SIGQUIT are ignored (a stray `^C` must not kill the
-  emulator before the shell claims the foreground), SIGPIPE is ignored.
-- Tracks the shell's admin-session state via an OSC and asks Lumen to tint the
-  titlebar accordingly.
+AspisOS is decomposed into independent repositories. terminal sits at the leaf
+of the graphical stack:
+
+| Repo | Role |
+|------|------|
+| [`AspisOS/Aegis`](https://github.com/AspisOS/Aegis) | The kernel: capability model, PTYs, `AF_UNIX` sockets, `sys_spawn`, the syscalls the desktop runs on. |
+| [`AspisOS/lumen`](https://github.com/AspisOS/lumen) | The compositor / display server. Owns the framebuffer; every GUI app is one of its clients. |
+| [`AspisOS/glyph`](https://github.com/AspisOS/glyph) | The GUI toolkit terminal links against: the shared terminal-emulator core (`glyph_term`), `glyph_pty_open_and_spawn`, the renderer, and the client side of the Lumen protocol (`lumen_client.h`). |
+| `AspisOS/lumen-terminal` | **This repo.** The standalone terminal app. |
+
+## What it does
+
+Grounded in `src/main.c`:
+
+- Connects to Lumen (`lumen_connect_retry`), opens a PTY and spawns `/bin/stsh`
+  on the slave (`glyph_pty_open_and_spawn`), and bridges the two halves:
+  - PTY master output is fed to glyph's `glyph_term` emulator core, rendered
+    into the window backbuffer, and presented to Lumen as damage.
+  - `LUMEN_EV_KEY` events are translated back to VT input on the PTY master
+    (`glyph_term_translate_key`). Mouse down/move/up drive `glyph_term`
+    selection.
+- **Key translation:** Lumen delivers one byte per key event. Synthetic arrow
+  codes (`0xF1..0xF4`) are re-expanded to VT sequences (`\033[A`..`\033[D`);
+  everything else, including `^C` and bare Esc, writes through verbatim.
+- **Window sizing:** aims for 100x48 cells at the mono font's cell metrics,
+  clamped to roughly 7/8 of the framebuffer when Lumen passes
+  `LUMEN_FB_W`/`LUMEN_FB_H` in the environment (the v1 protocol has no resize
+  op). A 500-line scrollback covers taller output.
+- **Event loop** is `poll(2)` over the Lumen socket and the PTY master, with a
+  250 ms timeout that drives cursor blink while idle.
+- **Signal handling** reflects PTY foreground-group subtleties: SIGTERM closes
+  gracefully; SIGINT/SIGQUIT are ignored so a stray `^C` delivered before the
+  shell claims the foreground cannot kill the emulator; SIGPIPE is ignored so a
+  dead compositor socket fails with `EPIPE` rather than a signal.
+- On shell exit or socket loss it tears down cleanly — `SIGHUP`s a still-live
+  shell, closes the master, destroys the emulator and window.
+- Tracks the shell's admin-session state via an OSC and asks Lumen
+  (`lumen_window_set_admin`) to tint the titlebar accordingly.
 
 ## Capabilities
 
-terminal's cap policy (`pkg/etc/aegis/caps.d/terminal`) is the baseline:
+AspisOS grants a process no ambient authority; it can touch the system only
+through capabilities declared for it at exec time. terminal's policy
+(`pkg/etc/aegis/caps.d/terminal`) is the baseline:
 
 ```
 service
 ```
 
-No elevated capabilities — it runs as an ordinary service-profile client. The
-shell it spawns inherits the session's identity.
+The `service` profile and **no** elevated capabilities — terminal runs as an
+ordinary client. The shell it spawns inherits the session's own identity and
+authority; the terminal grants it nothing extra.
 
-Because its herald package id (`lumen-terminal`) intentionally differs from the
-bundle/binary name (`terminal`), and it installs across `/apps` and
-`/etc/aegis/caps.d`, terminal is a `class=system` package: first-party and
-signature-trusted, installed verbatim by herald.
+## Status
+
+terminal is a working but deliberately minimal emulator: a single window, one
+shell, fixed size (no resize op in the v1 protocol), with selection, scrollback,
+and the admin-tint signal already in place. Richer behavior (tabs, configurable
+fonts/profiles, resize) is expected to land as AspisOS and the Lumen protocol
+mature.
 
 ## Building
 
-terminal fetches a pinned [glyph](https://github.com/AspisOS/glyph) toolkit
-artifact (the GUI libraries it links) and builds against it, then packs a signed
-herald package.
+terminal builds with a musl cross-compiler against a **pinned**
+[glyph](https://github.com/AspisOS/glyph) toolkit artifact (the GUI libraries it
+links), then packs a signed herald package.
 
 ```sh
 make MUSL_CC=/path/to/musl-gcc HERALD_KEY=/path/to/signing.key
 ```
 
-- `GLYPH_VERSION` pins the toolkit release fetched by `tools/fetch-glyph.sh`.
-- `MUSL_CC` is the musl cross-compiler (the only toolchain assumption — point it
-  at an Aegis-native `cc` to build on-device in the future).
-- `HERALD_KEY` signs the `.hpkg`.
+- `make` runs `tools/fetch-glyph.sh $(GLYPH_VERSION)` to download and unpack the
+  pinned toolkit into `toolkit/`, compiles `src/*.c` against it, then packs.
+- `MUSL_CC` is the musl cross-compiler (defaults to `musl-gcc` on `PATH`; the
+  only toolchain assumption — point it at an Aegis-native `cc` to build on-device
+  in the future).
+- `HERALD_KEY` is the ECDSA-P256 key that signs the `.hpkg`.
+- `GLYPH_VERSION` pins the toolkit release; `VERSION` is this app's own version.
 
 Output: `lumen-terminal.hpkg` (a `class=system` herald package) +
 `lumen-terminal.hpkg.sig`.
 
 ## Package payload
 
+`lumen-terminal.hpkg` is a **herald `class=system` package**: a manifest-first
+uncompressed POSIX `ustar` archive with a detached ECDSA-P256/SHA-256 signature
+(`tools/pack.sh`). Its herald id (`lumen-terminal`) deliberately differs from the
+bundle/exec name (`terminal`), and it installs across two trees — which is
+exactly why it is `class=system` (first-party, signature-trusted, installed
+verbatim) rather than an ordinary single-prefix package:
+
 ```
 /apps/terminal/terminal         the app binary
-/apps/terminal/app.ini          the bundle descriptor (launcher metadata)
+/apps/terminal/app.ini          the bundle descriptor (name=Terminal, exec=terminal)
 /etc/aegis/caps.d/terminal      its capability policy
 ```
 
 ## Repository layout
 
 ```
-src/        terminal source
+src/        terminal source (main.c)
 pkg/        install-tree skeleton shipped verbatim (apps bundle + caps.d)
-tools/      fetch-glyph.sh (toolkit fetch) + pack.sh (build the signed .hpkg)
+tools/      fetch-glyph.sh (pinned toolkit fetch) + pack.sh (build the signed .hpkg)
 Makefile    fetch toolkit -> build -> pack
-VERSION         this component's version
+VERSION         this app's version
 GLYPH_VERSION   the pinned glyph toolkit version it builds against
 ```
 
 ## Dependencies
 
 `depends=lumen` — terminal is an external client of the compositor, so
-installing it pulls [lumen](https://github.com/AspisOS/lumen) (which also
-supplies the desktop fonts).
+installing it pulls [lumen](https://github.com/AspisOS/lumen). lumen also ships
+the desktop fonts (Inter, JetBrains Mono — the monospace font this terminal
+renders with), so terminal inherits them transitively; there is no separate font
+package.
