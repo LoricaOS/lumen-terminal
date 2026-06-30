@@ -3,13 +3,13 @@
 # against. Canonical copy lives here; component repos carry their own copy.
 #
 # Resolution: local cache vendor/glyph-<ver>.tar.gz, else download the release.
-# Unpacks include/ + lib/ into <dest-dir>. Mirrors AspisOS's fetch-kernel.sh.
+# Unpacks include/ + lib/ into <dest-dir>. Mirrors LoricaOS's fetch-kernel.sh.
 set -eu
 VER="${1:?usage: fetch-glyph.sh <version> <dest-dir>}"
 DEST="${2:?usage: fetch-glyph.sh <version> <dest-dir>}"
 
 CACHE="vendor/glyph-${VER}.tar.gz"
-URL="https://github.com/AspisOS/glyph/releases/download/v${VER}/glyph-${VER}.tar.gz"
+URL="https://github.com/LoricaOS/glyph/releases/download/v${VER}/glyph-${VER}.tar.gz"
 
 mkdir -p vendor "$DEST"
 if [ -f "$CACHE" ]; then

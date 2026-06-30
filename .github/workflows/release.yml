@@ -1,7 +1,7 @@
 name: build hpkg
 
 # Builds the component's herald package (.hpkg) and attaches it to the GitHub
-# release. Reproduces the AspisOS toolchain exactly: stock musl 1.2.5 + the one
+# release. Reproduces the LoricaOS toolchain exactly: stock musl 1.2.5 + the one
 # DNS-resolver patch (the same musl the OS ships), then fetches the pinned glyph
 # toolkit artifact and runs the repo's own `make`. The package is built UNSIGNED
 # here — the official signed distribution is the herald repo (Chancery signs the

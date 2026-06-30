@@ -1,14 +1,14 @@
 # lumen-terminal
 
-The Terminal app for **AspisOS**, a capability-based, no-ambient-authority
+The Terminal app for **LoricaOS**, a capability-based, no-ambient-authority
 x86-64 operating system built on the from-scratch
-[Aegis](https://github.com/AspisOS/Aegis) kernel.
+[Aegis](https://github.com/LoricaOS/Aegis) kernel.
 
 terminal is a graphical terminal emulator: it opens a pseudo-terminal, spawns a
 shell on the slave, and bridges that PTY to a window. It is a standalone
 component of the Lumen desktop, distributed as a
-[herald](https://github.com/AspisOS/AspisOS) package, and runs as an **external
-client** of the [lumen](https://github.com/AspisOS/lumen) compositor — it
+[herald](https://github.com/LoricaOS/LoricaOS) package, and runs as an **external
+client** of the [lumen](https://github.com/LoricaOS/lumen) compositor — it
 connects to `/run/lumen.sock` over the Lumen window protocol rather than being an
 in-process compositor built-in. (Regular terminal windows were moved out of
 Lumen by the subsystem-peeling work; only the quake-style dropdown terminal
@@ -16,15 +16,15 @@ remains embedded in the compositor.)
 
 ## Where terminal fits
 
-AspisOS is decomposed into independent repositories. terminal sits at the leaf
+LoricaOS is decomposed into independent repositories. terminal sits at the leaf
 of the graphical stack:
 
 | Repo | Role |
 |------|------|
-| [`AspisOS/Aegis`](https://github.com/AspisOS/Aegis) | The kernel: capability model, PTYs, `AF_UNIX` sockets, `sys_spawn`, the syscalls the desktop runs on. |
-| [`AspisOS/lumen`](https://github.com/AspisOS/lumen) | The compositor / display server. Owns the framebuffer; every GUI app is one of its clients. |
-| [`AspisOS/glyph`](https://github.com/AspisOS/glyph) | The GUI toolkit terminal links against: the shared terminal-emulator core (`glyph_term`), `glyph_pty_open_and_spawn`, the renderer, and the client side of the Lumen protocol (`lumen_client.h`). |
-| `AspisOS/lumen-terminal` | **This repo.** The standalone terminal app. |
+| [`LoricaOS/Aegis`](https://github.com/LoricaOS/Aegis) | The kernel: capability model, PTYs, `AF_UNIX` sockets, `sys_spawn`, the syscalls the desktop runs on. |
+| [`LoricaOS/lumen`](https://github.com/LoricaOS/lumen) | The compositor / display server. Owns the framebuffer; every GUI app is one of its clients. |
+| [`LoricaOS/glyph`](https://github.com/LoricaOS/glyph) | The GUI toolkit terminal links against: the shared terminal-emulator core (`glyph_term`), `glyph_pty_open_and_spawn`, the renderer, and the client side of the Lumen protocol (`lumen_client.h`). |
+| `LoricaOS/lumen-terminal` | **This repo.** The standalone terminal app. |
 
 ## What it does
 
@@ -57,7 +57,7 @@ Grounded in `src/main.c`:
 
 ## Capabilities
 
-AspisOS grants a process no ambient authority; it can touch the system only
+LoricaOS grants a process no ambient authority; it can touch the system only
 through capabilities declared for it at exec time. terminal's policy
 (`pkg/etc/aegis/caps.d/terminal`) is the baseline:
 
@@ -74,13 +74,13 @@ authority; the terminal grants it nothing extra.
 terminal is a working but deliberately minimal emulator: a single window, one
 shell, fixed size (no resize op in the v1 protocol), with selection, scrollback,
 and the admin-tint signal already in place. Richer behavior (tabs, configurable
-fonts/profiles, resize) is expected to land as AspisOS and the Lumen protocol
+fonts/profiles, resize) is expected to land as LoricaOS and the Lumen protocol
 mature.
 
 ## Building
 
 terminal builds with a musl cross-compiler against a **pinned**
-[glyph](https://github.com/AspisOS/glyph) toolkit artifact (the GUI libraries it
+[glyph](https://github.com/LoricaOS/glyph) toolkit artifact (the GUI libraries it
 links), then packs a signed herald package.
 
 ```sh
@@ -127,7 +127,7 @@ GLYPH_VERSION   the pinned glyph toolkit version it builds against
 ## Dependencies
 
 `depends=lumen` — terminal is an external client of the compositor, so
-installing it pulls [lumen](https://github.com/AspisOS/lumen). lumen also ships
+installing it pulls [lumen](https://github.com/LoricaOS/lumen). lumen also ships
 the desktop fonts (Inter, JetBrains Mono — the monospace font this terminal
 renders with), so terminal inherits them transitively; there is no separate font
 package.
