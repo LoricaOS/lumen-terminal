@@ -34,6 +34,7 @@
 
 #include <glyph.h>
 #include <glyph_term.h>
+#include <glyph_theme.h>
 #include <lumen_client.h>
 #include <font.h>
 
@@ -50,6 +51,61 @@ env_int(const char *name)
     return v ? atoi(v) : 0;
 }
 
+/* Cell metrics for a given font size. */
+static void
+cell_metrics(int font_px, int *cw, int *ch)
+{
+    *cw = g_font_mono ? font_text_width(g_font_mono, font_px, "M") : FONT_W;
+    *ch = g_font_mono ? font_height(g_font_mono, font_px) : FONT_H;
+}
+
+/* Recompute cols/rows for the window's current pixel size at font_px and resize
+ * the grid (also applies scrollback + pushes TIOCSWINSZ). Used on window resize
+ * and on a live font-size/scrollback change. */
+static void
+term_refit(glyph_term_t *term, lumen_window_t *lwin, int font_px, int scrollback)
+{
+    int cw, ch;
+    cell_metrics(font_px, &cw, &ch);
+    int cols = (lwin->w - 2 * TERM_PAD - GLYPH_TERM_SB_WIDTH) / cw;
+    int rows = (lwin->h - 2 * TERM_PAD) / ch;
+    if (cols < 10) cols = 10;
+    if (rows < 4)  rows = 4;
+    term->scrollback = scrollback;
+    glyph_term_resize(term, cols, rows, cw, ch, font_px);
+}
+
+/* Apply the live glyph_theme terminal prefs to the emulator. Returns 1 if a
+ * font-size or scrollback change needs a grid refit (caller does term_refit). */
+static int
+term_apply_prefs(glyph_term_t *term)
+{
+    glyph_term_set_theme(term, glyph_theme_term_scheme());
+    glyph_term_set_cursor_style(term, glyph_theme_term_cursor());
+    glyph_term_set_cursor_blink(term, glyph_theme_term_blink());
+    return term->font_px != glyph_theme_term_font_px() ||
+           term->scrollback != glyph_theme_term_scrollback();
+}
+
+/* Cheap fingerprint of the terminal prefs, to detect live Settings changes. */
+static unsigned
+term_prefs_sig(void)
+{
+    return (unsigned)(glyph_theme_term_scheme() * 131 +
+                      glyph_theme_term_cursor() * 17 +
+                      glyph_theme_term_blink()  * 7  +
+                      glyph_theme_term_font_px() * 3 +
+                      glyph_theme_term_scrollback());
+}
+
+static long
+mono_ms(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -62,10 +118,11 @@ main(int argc, char **argv)
         return 1;
     }
 
-    /* Fonts first — cell metrics decide the window size. */
+    /* Fonts first — cell metrics decide the window size. font size from prefs. */
     font_init();
-    int cell_w = g_font_mono ? font_text_width(g_font_mono, 16, "M") : FONT_W;
-    int cell_h = g_font_mono ? font_height(g_font_mono, 16) : FONT_H;
+    int font_px = glyph_theme_term_font_px();
+    int cell_w, cell_h;
+    cell_metrics(font_px, &cell_w, &cell_h);
 
     /* Large by default: aim for 100x48 but fill most (≈7/8) of the framebuffer
      * when Lumen tells us the screen size, so long output (e.g. /proc/hda) is
@@ -89,7 +146,8 @@ main(int argc, char **argv)
     int win_w = TERM_PAD + cols * cell_w + GLYPH_TERM_SB_WIDTH + TERM_PAD;
     int win_h = TERM_PAD + rows * cell_h + TERM_PAD;
 
-    lumen_window_t *lwin = lumen_window_create(lfd, "Terminal", win_w, win_h);
+    lumen_window_t *lwin = lumen_window_create_ex(lfd, "Terminal", win_w, win_h,
+                                                  LUMEN_WIN_FLAG_RESIZABLE);
     if (!lwin) {
         dprintf(2, "[TERM] lumen_window_create failed\n");
         close(lfd);
@@ -112,6 +170,11 @@ main(int argc, char **argv)
         return 1;
     }
 
+    /* Apply saved terminal prefs (color scheme, cursor, blink) + establish the
+     * grid at the preferred scrollback/font. */
+    term_apply_prefs(term);
+    term_refit(term, lwin, font_px, glyph_theme_term_scrollback());
+
     /* Signals: SIGTERM → graceful close. SIGINT/SIGQUIT ignored — the
      * kernel's receive-time ISIG may target the PTY's initial fg_pgrp
      * (us, the opener) before the shell claims foreground via
@@ -132,6 +195,7 @@ main(int argc, char **argv)
     int mfd = glyph_pty_open_and_spawn(&fail_reason, &shell_pid);
     if (mfd >= 0) {
         term->master_fd = mfd;
+        glyph_term_apply_winsize(term);   /* tell the shell our real size */
     } else {
         dprintf(2, "[TERM] pty failed: %s\n",
                 fail_reason ? fail_reason : "unknown");
@@ -154,6 +218,8 @@ main(int argc, char **argv)
     int last_blink = -1;
     char pty_buf[512];
     char keybuf[4];
+    unsigned last_sig = term_prefs_sig();
+    long last_pref_ms = mono_ms();
 
     while (!done && !s_term_requested) {
         struct pollfd pfd[2];
@@ -168,6 +234,22 @@ main(int argc, char **argv)
         /* 250ms timeout keeps the cursor blinking when idle. */
         int pr = poll(pfd, (nfds_t)nfds, 250);
         int dirty = 0;
+
+        /* Live Settings changes: re-read prefs ~1×/s and apply (theme/cursor/
+         * blink instantly; font-size/scrollback trigger a grid refit). */
+        long tnow = mono_ms();
+        if (tnow - last_pref_ms >= 1000) {
+            last_pref_ms = tnow;
+            glyph_theme_reload_prefs();
+            unsigned sig = term_prefs_sig();
+            if (sig != last_sig) {
+                last_sig = sig;
+                if (term_apply_prefs(term))
+                    term_refit(term, lwin, glyph_theme_term_font_px(),
+                               glyph_theme_term_scrollback());
+                dirty = 1;
+            }
+        }
 
         if (pr > 0) {
             /* Lumen events */
@@ -195,6 +277,17 @@ main(int argc, char **argv)
                         else if (ev.mouse.evtype == LUMEN_MOUSE_UP)
                             dirty |= glyph_term_mouse_up(term, ev.mouse.x,
                                                          ev.mouse.y);
+                    }
+                    if (ev.type == LUMEN_EV_RESIZED) {
+                        if (lumen_window_apply_resize(lwin, ev.resized.new_w,
+                                                      ev.resized.new_h) == 0) {
+                            surf.buf   = (uint32_t *)lwin->backbuf;
+                            surf.w     = lwin->w;
+                            surf.h     = lwin->h;
+                            surf.pitch = lwin->stride;
+                            term_refit(term, lwin, term->font_px, term->scrollback);
+                            dirty = 1;
+                        }
                     }
                     /* LUMEN_EV_FOCUS and unknown events: ignored */
                 }
