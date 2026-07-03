@@ -17,6 +17,8 @@ ROOT="$(pwd)"
 VER="$(cat VERSION)"
 KEY="${HERALD_KEY:-}"
 STRIP="${STRIP:-strip}"
+ARCH="${ARCH:-x86_64}"                    # target arch (arm64 → arch=arm64 + -arm64.hpkg)
+SUF=""; [ "$ARCH" = x86_64 ] || SUF="-$ARCH"
 
 # ── per-component knobs ──────────────────────────────────────────────────────
 ID=lumen-terminal                       # herald package id (differs from bundle/exec name)
@@ -34,11 +36,11 @@ fi
 chmod 0755 "$STAGE/$DESTBIN"
 # pkg/ mirrors the install tree (caps.d / vigil / app.ini) — ship it verbatim.
 [ -d pkg ] && cp -R pkg/. "$STAGE/"
-printf 'id=%s\nname=%s\nversion=%s\nclass=system\ndepends=%s\n' \
-    "$ID" "$NAME" "$VER" "$DEPENDS" > "$STAGE/manifest"
+printf 'id=%s\nname=%s\nversion=%s\nclass=system\narch=%s\ndepends=%s\n' \
+    "$ID" "$NAME" "$VER" "$ARCH" "$DEPENDS" > "$STAGE/manifest"
 
 roots="$(cd "$STAGE" && ls -A | grep -v '^manifest$' | tr '\n' ' ')"
-cd "$STAGE" && tar --format=ustar -cf "$ROOT/$ID.hpkg" manifest $roots
+cd "$STAGE" && tar --format=ustar -cf "$ROOT/$ID$SUF.hpkg" manifest $roots
 cd "$ROOT"
-if [ -n "$KEY" ]; then openssl dgst -sha256 -sign "$KEY" -out "$ID.hpkg.sig" "$ID.hpkg"; else rm -f "$ID.hpkg.sig"; echo "[$ID] unsigned (no HERALD_KEY set)"; fi
-echo "[$ID] $ID.hpkg $VER ($(wc -c < "$ID.hpkg") bytes) + .sig"
+if [ -n "$KEY" ]; then openssl dgst -sha256 -sign "$KEY" -out "$ID$SUF.hpkg.sig" "$ID$SUF.hpkg"; else rm -f "$ID$SUF.hpkg.sig"; echo "[$ID] unsigned (no HERALD_KEY set)"; fi
+echo "[$ID] $ID$SUF.hpkg $VER ($(wc -c < "$ID$SUF.hpkg") bytes) + .sig"
