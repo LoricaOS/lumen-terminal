@@ -106,6 +106,21 @@ mono_ms(void)
     return t.tv_sec * 1000 + t.tv_nsec / 1000000;
 }
 
+/* Top-bar app menu. The only app-level action is closing the window (which
+ * hangs up the shell on the way out); clear/copy/paste live in the shell and
+ * the terminal's own key/mouse handling, not here. */
+enum { CMD_CLOSE = 1 };
+
+static void
+publish_menu(lumen_window_t *lwin)
+{
+    lumen_set_menu_t m;
+    glyph_menu_reset(&m, lwin->id);
+    int t = glyph_menu_add_col(&m, "Terminal");
+    glyph_menu_add_item(&m, t, "Close", CMD_CLOSE);
+    lumen_window_set_menu(lwin, &m);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -208,6 +223,9 @@ main(int argc, char **argv)
     glyph_term_render(term, &surf, 0, 0, lwin->w, lwin->h);
     lumen_window_present(lwin);
 
+    /* Publish the top-bar app menu once the window exists. */
+    publish_menu(lwin);
+
     dprintf(2, "[TERM] connected %dx%d cols=%d rows=%d\n",
             lwin->w, lwin->h, cols, rows);
 
@@ -260,6 +278,11 @@ main(int argc, char **argv)
                     if (ev.type == LUMEN_EV_CLOSE_REQUEST) {
                         done = 1;
                         break;
+                    }
+                    if (ev.type == LUMEN_EV_MENU_INVOKE) {
+                        if (ev.menu.command == CMD_CLOSE)
+                            done = 1;
+                        continue;
                     }
                     if (ev.type == LUMEN_EV_KEY && ev.key.pressed && mfd >= 0) {
                         int n = glyph_term_translate_key(
